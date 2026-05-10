@@ -1,0 +1,64 @@
+app.put('/api/peliculas/:id', upload.single('imagen'), async (req, res) => {
+    const { id } = req.params;
+    const { Titulo, Año, Genero, Duracion } = req.body;
+
+    const parsedAño = Año && Año !== 'null' && Año !== '' ? parseInt(Año) : null;
+    const parsedDuracion = Duracion ? parseInt(Duracion) : 0;
+
+    try {
+        // 1. Obtener la película actual de la DB
+        const currentMovieResult = await pool.request()
+            .input('id', sql.Int, id)
+            .query('SELECT imagen_url FROM Peliculas WHERE id = @id');
+        
+        if (currentMovieResult.recordset.length === 0) {
+            return res.status(404).json({ error: 'Película no encontrada' });
+        }
+
+        const currentImageUrl = currentMovieResult.recordset[0].imagen_url;
+        let finalImageUrl = currentImageUrl; // Por defecto mantemos la actual
+
+        // 2. Determinar la nueva URL de la imagen
+        if (req.file) {
+            // Se subió una NUEVA foto
+            finalImageUrl = `/imagenes/${req.file.filename}`;
+
+            // Borrar la foto VIEJA física (si no es la por defecto)
+            if (currentImageUrl && currentImageUrl !== '/imagenes/default.jpg') {
+                const oldFilename = currentImageUrl.split('/').pop();
+                const oldFilePath = path.join(__dirname, 'uploads', 'imagenes', oldFilename);
+                if (fs.existsSync(oldFilePath)) {
+                    fs.unlinkSync(oldFilePath);
+                }
+            }
+        } 
+
+        // 3. Actualizar en la base de datos
+        await pool.request()
+            .input('id', sql.Int, id)
+            .input('Titulo', sql.NVarChar, Titulo)
+            .input('Año', sql.Int, parsedAño)
+            .input('Genero', sql.NVarChar, Genero)
+            .input('Duracion', sql.Int, parsedDuracion)
+            .input('imagen_url', sql.NVarChar, finalImageUrl) // Actualizamos con la URL definitiva
+            .query(`
+                UPDATE Peliculas 
+                SET Titulo = @Titulo, Año = @Año, Genero = @Genero, Duracion = @Duracion, imagen_url = @imagen_url 
+                WHERE id = @id
+            `);
+
+        // Devolver la película actualizada
+        const result = await pool.request()
+            .input('id', sql.Int, id)
+            .query('SELECT * FROM Peliculas WHERE id = @id');
+
+        res.json(result.recordset[0]);
+    } catch (err) {
+        console.error('Error al actualizar película:', err);
+        // Si hubo error y se subió foto nueva, borrarla
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        res.status(500).json({ error: 'Error interno al actualizar la película' });
+    }
+});
